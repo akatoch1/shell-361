@@ -71,7 +71,7 @@ int sh( int argc, char **argv, char **envp )
         }
       printf("%s[%s]> ", prompt, owd);
       /* get command line and process */
-      
+      free(owd);
       
       if (fgets(buf, BUFFER_SIZE, stdin) == NULL) {
         printf("\n Use exit\n");
@@ -179,9 +179,11 @@ int sh( int argc, char **argv, char **envp )
         free(args);
         while (pathlist != NULL) {
           next = pathlist->next;
+          free(pathlist->element);
           free(pathlist);
           pathlist = next;
         }
+        
         return 0;
       }
 
@@ -211,11 +213,12 @@ int sh( int argc, char **argv, char **envp )
 
           }
           else {
-            
-            setenv("OLDPWD", getenv("PWD"), 1);
+            char *t = getenv("PWD");
             if (chdir(args[1]) < 0) {
               perror("Not a directory");
+              continue;
             }
+            setenv("OLDPWD", t, 1);
             pwd = getcwd(NULL, PATH_MAX + 1);
             setenv("PWD", pwd, 1);
             
@@ -287,6 +290,7 @@ int sh( int argc, char **argv, char **envp )
           }
           else if (output != NULL) {
             execve(output, args, environ);
+            
             perror("execve");
           }
           else {
@@ -298,6 +302,7 @@ int sh( int argc, char **argv, char **envp )
           int child_stat;
           free(output);
           waitpid(pid, &child_stat, 0);
+          
         }
 
         
@@ -308,8 +313,9 @@ int sh( int argc, char **argv, char **envp )
      // else
      //   fprintf(stderr, "%s: Command not found.\n", args[0]);
       
-
+      
     }
+    
   return 0;
 } /* sh() */
 
@@ -331,7 +337,7 @@ char *which(char *command, struct pathelement *pathlist )
     if (access(s, F_OK) == 0) {
       return s;
     }
-    
+    free(s);
     pathlist = pathlist->next;
   }
   
@@ -355,7 +361,7 @@ void where(char *command, struct pathelement *pathlist )
 
   while (pathlist != NULL) {
     char *s = malloc(strlen(pathlist->element) + strlen(command) + 1);
-    strcat(s, pathlist->element);
+    strcpy(s, pathlist->element);
     strcat(s, "/");
     strcat(s, command);
     if (access(s, F_OK) == 0) {
