@@ -92,7 +92,7 @@ int sh( int argc, char **argv, char **envp )
           int csource;
           char **p;
           csource = glob(token, 0, NULL, &paths);
-
+          
           if (csource == 0) {
             for (p = paths.gl_pathv; *p != NULL; ++p) {
               //printf("%s\n", *p);
@@ -115,6 +115,7 @@ int sh( int argc, char **argv, char **envp )
       }
       
       int args_count = i;
+      
       //printf("%s\n", args[12]);
      // printf("%ld",strlen(args[1]));
       /* check for each built in command and implement */
@@ -302,7 +303,10 @@ int sh( int argc, char **argv, char **envp )
           int child_stat;
           free(output);
           waitpid(pid, &child_stat, 0);
-          
+         // for (int x = 0; x < MAXARGS; x++) {
+         //   printf("%s\n", args[x]);
+        //  }
+        
         }
 
         
