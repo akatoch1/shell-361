@@ -12,8 +12,19 @@
 #include "sh.h"
 #include <errno.h>
 #include <glob.h>
-char* built_in_commands[] = {"exit", "which", "where", "cd", "pwd", "list", "pid", "kill", "prompt", "printenv", "setenv"};
+#include <pthread.h>
+#include <sys/stat.h>
+#include <fcntl.h>
+char* built_in_commands[] = {"exit", "which", "where", "cd", "pwd", "list", "pid", "kill", "prompt", "printenv", "setenv", "watchuser", "noclobber"};
 #define BUFFER_SIZE 1024
+extern char **environ;
+
+
+
+void zombie(int sig) {
+  int child;
+  waitpid((pid_t) (-1), &child, WNOHANG);
+}
 void sig_intCatcher(int button) {  
     signal(SIGINT, sig_intCatcher);
     fflush(stdout);
@@ -26,6 +37,11 @@ void sig_termCatcher(int button) {
   signal(SIGTERM, sig_termCatcher);
   fflush(stdout);
 }
+void *mythread(void *param) {
+  char **arg = (char **) param;
+  execve(arg[0], arg, environ);
+  perror("execve");
+}
 int sh( int argc, char **argv, char **envp )
 {
   
@@ -37,9 +53,11 @@ int sh( int argc, char **argv, char **envp )
   int uid, i, status, argsct, go = 1;
   struct passwd *password_entry;
   char *homedir;
-  extern char **environ;
+  int noclobber = 0;
   struct pathelement *pathlist;
   
+  struct stat b;
+  int red_index;
   uid = getuid();
   password_entry = getpwuid(uid);               /* get passwd info */
   homedir = password_entry->pw_dir;/* Home directory to start
@@ -57,9 +75,13 @@ int sh( int argc, char **argv, char **envp )
   pathlist = get_path();
   signal(SIGINT, sig_intCatcher);
   signal(SIGTSTP, sig_tstpCatcher);
-  signal(SIGTERM, sig_termCatcher);
+  signal(SIGTERM, sig_termCatcher); 
+  signal(SIGCHLD, zombie);
+  int redirect;
+  char *red_op;
   while ( go )
     {
+      redirect = 0;
       owd = getcwd(NULL, PATH_MAX + 1);
       signal(SIGINT, sig_intCatcher);
       signal(SIGTSTP, sig_tstpCatcher);
@@ -71,7 +93,7 @@ int sh( int argc, char **argv, char **envp )
         }
       printf("%s[%s]> ", prompt, owd);
       /* get command line and process */
-      free(owd);
+      
       
       if (fgets(buf, BUFFER_SIZE, stdin) == NULL) {
         printf("\n Use exit\n");
@@ -89,7 +111,7 @@ int sh( int argc, char **argv, char **envp )
        if ((strstr(token, "*") != NULL) || (strstr(token, "?") != NULL)) {
          
           glob_t paths;
-          int csource;
+          int csource;    // check if token has wildcard
           char **p;
           csource = glob(token, 0, NULL, &paths);
           
@@ -116,8 +138,16 @@ int sh( int argc, char **argv, char **envp )
       
       int args_count = i;
       
-      //printf("%s\n", args[12]);
-     // printf("%ld",strlen(args[1]));
+      for (int i = 0; i < args_count; i++) {
+        if ((strcmp(args[i], ">")==0) || (strcmp(args[i], ">&")==0) || (strcmp(args[i], ">>")==0) 
+            || (strcmp(args[i], ">>&")==0) || (strcmp(args[i], "<")==0)) {
+              redirect = 1;
+              red_op = args[i];
+              red_index = i;
+            }
+
+      }
+
       /* check for each built in command and implement */
       //printf("%s", args[1]);
       if (strcmp(args[0], "which") == 0) {
@@ -131,7 +161,6 @@ int sh( int argc, char **argv, char **envp )
           
           output = which(args[j], pathlist);
           if (output == NULL) {
-            free(output);
             fprintf(stderr, "%s: Command not found.\n", args[j]);
             continue;
           }
@@ -143,7 +172,30 @@ int sh( int argc, char **argv, char **envp )
         continue;  
       }
 
+      else if (strcmp(args[0], "noclobber") == 0) {
+        if (noclobber) {
+          noclobber = 0;
+        }
+        else {
+          noclobber = 1;
+        }
+      }
+
+      else if (strcmp(args[0], "watchuser") == 0) {
+        printf("Executing built-in %s\n", args[0]);
+        if (args_count == 2) {
+
+        }
+        else if (args_count == 3) {
+
+        }
+        else {
+          fprintf(stderr, "%s: Incorrect amount of arguments.\n", args[0]);
+        }
+      }
+
       else if (strcmp(args[0], "list") == 0) {
+        printf("Executing built-in %s\n", args[0]);
         if (args_count == 1) {
           list(getcwd(NULL, PATH_MAX + 1));
         }
@@ -180,7 +232,6 @@ int sh( int argc, char **argv, char **envp )
         free(args);
         while (pathlist != NULL) {
           next = pathlist->next;
-          free(pathlist->element);
           free(pathlist);
           pathlist = next;
         }
@@ -211,10 +262,10 @@ int sh( int argc, char **argv, char **envp )
             chdir(getenv("OLDPWD"));
             setenv("PWD", getenv("OLDPWD"), 1);
             setenv("OLDPWD", temp, 1);
-
+                      
           }
           else {
-            char *t = getenv("PWD");
+            char *t = getenv("PWD");  //set environment variables appropiately
             if (chdir(args[1]) < 0) {
               perror("Not a directory");
               continue;
@@ -238,13 +289,13 @@ int sh( int argc, char **argv, char **envp )
       else if (strcmp(args[0], "prompt") == 0) {
         char *s = calloc(PROMPTMAX, sizeof(char));
         int c = 0;
-        while (prompt[c] != '\0') {
+        while (prompt[c] != '\0') { //process until null terminating
           prompt[c] = '\0';
           c++;
-        }
+        }   
         c = 0; 
         s = print_prompt(args, args_count);
-        while ((s[c] != '\n') && (s[c] != '\0')) {
+        while ((s[c] != '\n') && (s[c] != '\0')) { //account for \n input
           prompt[c] = s[c];
           c++;
         }
@@ -261,13 +312,18 @@ int sh( int argc, char **argv, char **envp )
           continue;
         } 
         else if (args_count == 2) {
-          setenv(args[1], "", 1);
+          setenv(args[1], "", 1);    //switch between diff arguments for setenv
         }
         else if (args_count == 3) {
           setenv(args[1], args[2], 1);
         }
         if (strcmp(args[0], "PATH") == 0) {
+          struct pathelement *next;
+          while (pathlist != NULL) {
+          next = pathlist->next;
           free(pathlist);
+          pathlist = next;
+        }
           pathlist = get_path();
         }
       }
@@ -280,36 +336,107 @@ int sh( int argc, char **argv, char **envp )
       else {
         printf("Executing %s\n", args[0]);
         pid_t pid;
-        
+        char *cmd;
+        int ex = 0;
         output = which(args[0], pathlist);
+        if (output != NULL) {
+          cmd = output;
+          ex = 1;
+        }
+        else if (access(args[0], F_OK) == 0) {
+          cmd = args[0];
+          ex = 1;
+        }
+        int background = 0;
+        if (strcmp(args[args_count-1], "&") == 0) {
+            args[args_count-1] = NULL;
+            background = 1;
+        }
         if ((pid = fork()) < 0) {
           printf("fork error\n");
         }
         else if (pid == 0) {
-          if (access(args[0], F_OK) == 0) {
-            execve(args[0], args, environ);
+          if (redirect) { //redirect detected
+            int file_exists = 0;
+            if (access(args[red_index+1], F_OK) == 0) {
+              file_exists = 1;
+            }
+            if (strcmp(red_op, ">") == 0) {
+              if ((noclobber) && (file_exists)) {
+                fprintf(stderr, "%s: File exists.\n", args[args_count - 1]);
+                continue;
+              }
+              int fid = open(args[red_index+1], O_WRONLY|O_CREAT|O_TRUNC, 0777);
+              close(1);
+              dup(fid);
+              close(fid);
+            }
+            else if (strcmp(red_op, ">&") == 0) {
+              if ((noclobber) && (file_exists)) {
+                fprintf(stderr, "%s: File exists.\n", args[args_count - 1]);
+                continue;
+              }
+              int fid = open(args[red_index+1], O_WRONLY|O_CREAT|O_TRUNC, 0777);
+              close(1);
+              dup(fid);
+              close(2);
+              dup(fid);
+              close(fid);
+            }
+            else if (strcmp(red_op, ">>") == 0) {
+              if ((noclobber) && (!file_exists)) {
+                fprintf(stderr, "%s: File does not exist.\n", args[args_count - 1]);
+                continue;
+              }
+              int fid = open(args[red_index+1], O_WRONLY|O_CREAT|O_APPEND, 0777);
+              close(1);
+              dup(fid);
+              close(fid);
+            }
+            else if (strcmp(red_op, ">>&") == 0) {
+              if ((noclobber) && (!file_exists)) {
+                fprintf(stderr, "%s: File does not exist.\n", args[args_count - 1]);
+                continue;
+              }
+              int fid = open(args[red_index+1], O_WRONLY|O_CREAT|O_APPEND, 0777);
+              close(1);
+              dup(fid);
+              close(2);
+              dup(fid);
+              close(fid);
+            }
+            else if (strcmp(red_op, "<") == 0) {
+              int fid = open(args[red_index+1], O_RDONLY);
+              close(0);
+              dup(fid);
+              close(fid);
+            }
+            for (int i = red_index; i < args_count; i++) {
+              args[i] = NULL;
+            }
           }
-          else if (output != NULL) {
-            execve(output, args, environ);
-            
-            perror("execve");
+
+          if (ex) {
+            execve(cmd, args, environ);
           }
           else {
             fprintf(stderr, "%s: Command not found.\n", args[0]);
             exit(0);
           }
+
         }
         else {
           int child_stat;
-          free(output);
-          waitpid(pid, &child_stat, 0);
-         // for (int x = 0; x < MAXARGS; x++) {
-         //   printf("%s\n", args[x]);
-        //  }
-        
+          if (background) {
+            waitpid(pid, &child_stat, WNOHANG);
+          }
+          else {
+            waitpid(pid, &child_stat, 0);
+          }
         }
-
-        
+        if (output != NULL) {
+          free(output);
+        }
       }
 	/* find it */
 	/* do fork(), execve() and waitpid() */
@@ -336,8 +463,6 @@ char *which(char *command, struct pathelement *pathlist )
     strcpy(s, pathlist->element);
     strcat(s, "/");
     strcat(s, command);
-    //printf("%ld", strlen(s));
-    //printf("%ld, %ld", strlen(s), strlen("/usr/bin/python"));
     if (access(s, F_OK) == 0) {
       return s;
     }
@@ -368,7 +493,7 @@ void where(char *command, struct pathelement *pathlist )
     strcpy(s, pathlist->element);
     strcat(s, "/");
     strcat(s, command);
-    if (access(s, F_OK) == 0) {
+    if (access(s, F_OK) == 0) { //check if file is there
       printf("%s\n", s);
     }
 
@@ -420,7 +545,7 @@ void kill_proc(int argscount, char **args) {
     fprintf(stderr, "%s: Too few arguments.\n", args[0]);
   }
   else if (argscount == 2) {
-    long pid = strtol(args[1], NULL, 10);
+    long pid = strtol(args[1], NULL, 10); //convert given pid
     
     if (errno == EINVAL) {
       perror("Not a process id");
